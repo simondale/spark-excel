@@ -11,8 +11,6 @@ import com.crealytics.tags.WIP
 import com.holdenkarau.spark.testing.DataFrameSuiteBase
 import com.norbitltd.spoiwo.model.{Cell, CellRange, Sheet, Row => SRow, Table => STable}
 import com.norbitltd.spoiwo.natures.xlsx.Model2XlsxConversions._
-import com.softwaremill.diffx.{Derived, Diff}
-import com.softwaremill.diffx.scalatest.DiffMatcher
 import org.apache.poi.ss.util.CellReference
 import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.functions.{col, lit}
@@ -121,12 +119,30 @@ class IntegrationSuite extends FunSpec with PropertyChecks with DataFrameSuiteBa
       )
     }
 
+    def setNullableStateForAllColumns(df: DataFrame, nullable: Boolean) = {
+      def set(st: StructType): StructType =
+        StructType(st.map {
+          case StructField(name, dataType, _, metadata) =>
+            val newDataType = dataType match {
+              case t: StructType => set(t)
+              case _ => dataType
+            }
+            StructField(name, newDataType, nullable = nullable, metadata)
+        })
+
+      val newSchema = set(df.schema)
+      df.sqlContext.createDataFrame(df.rdd, newSchema)
+    }
+
     describe(s"with maxRowsInMemory = $maxRowsInMemory") {
-      it("parses known datatypes correctly") {
-        forAll(rowsGen) { rows =>
-          val expected = spark.createDataset(rows).toDF
-          val actual = writeThenRead(expected)
-          assertDataFrameApproximateEquals(expected, actual, relTol = 1.0e-6)
+      it("parses known datatypes correctly", WIP) {
+        forAll(rowsGen, fileNames) {
+          case (rows, fileName) =>
+            val expected = spark.createDataset(rows).toDF
+            val actual = writeThenRead(expected, fileName = Some(fileName))
+            //assertEqualAfterInferringTypes(actual, expected)
+            val expectedNullable = setNullableStateForAllColumns(expected, true)
+            assertDataFrameApproximateEquals(expectedNullable, actual)
         }
       }
 
@@ -184,7 +200,7 @@ class IntegrationSuite extends FunSpec with PropertyChecks with DataFrameSuiteBa
         it("handles differing header column names correctly") {
           ???
         }
-        it("works for multiple files", WIP) {
+        it("reads the data from all files") {
           forAll(rowsGen.filter(_.nonEmpty)) { rows =>
             val original = spark.createDataset(rows).toDF
             val subDfs = rows.zipWithIndex.groupBy(_._2 % 2).mapValues(r => spark.createDataset(r.map(_._1)).toDF)
@@ -219,11 +235,10 @@ class IntegrationSuite extends FunSpec with PropertyChecks with DataFrameSuiteBa
       }
 
       it("reads files without headers correctly") {
-        forAll(dataAndLocationGen.filter(_._1.nonEmpty)) {
-          case (rows, startCellAddress, endCellAddress) =>
+        forAll(dataAndLocationGen.filter(_._1.nonEmpty), fileNames) {
+          case ((rows, startCellAddress, endCellAddress), fileName) =>
             val original = spark.createDataset(rows).toDF
             val renamed = spark.createDataset(rows).toDF(original.schema.fieldNames.indices.map(i => s"_c$i"): _*)
-            val fileName = File.createTempFile("spark_excel_test_", ".xlsx").getAbsolutePath
             val inferred = writeThenRead(
               original,
               schema = None,
