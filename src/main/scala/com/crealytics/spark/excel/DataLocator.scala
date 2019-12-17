@@ -15,6 +15,7 @@ import com.crealytics.spark.excel.Utils.MapIncluding
 import org.apache.poi.ss.SpreadsheetVersion
 import org.apache.poi.ss.usermodel.{Cell, Row, Sheet, Workbook}
 import org.apache.poi.ss.util.{AreaReference, CellRangeAddress, CellReference}
+import org.apache.poi.util.NotImplemented
 import org.apache.poi.xssf.usermodel.{XSSFTable, XSSFWorkbook}
 
 import scala.collection.JavaConverters._
@@ -54,6 +55,9 @@ object DataLocator {
       throw new IllegalArgumentException(
         s"Reading from a table cannot be combined with maxRowsInMemory, parameters are: $parameters"
       )
+
+    case WithDataAddress(Seq(TableAddress("worksheet", "#Metadata")), Seq(dateFormat, timestampFormat)) =>
+      new MetadataDataLocator(dateFormat, timestampFormat)
 
     case WithDataAddress(Seq(TableAddress(tableName, "#All")), Seq(dateFormat, timestampFormat)) =>
       new TableDataLocator(tableName, dateFormat, timestampFormat)
@@ -181,5 +185,46 @@ class TableDataLocator(
 
   private def findTable(workbook: Workbook): Option[XSSFTable] = {
     Option(workbook.asInstanceOf[XSSFWorkbook].getTable(tableName))
+  }
+}
+
+class MetadataDataLocator(val dateFormat: Option[String] = None, val timestampFormat: Option[String] = None)
+    extends DataLocator {
+
+  override def readFrom(workbook: Workbook): Iterator[Seq[Cell]] = {
+    val metadata = Range(0, workbook.getNumberOfSheets)
+      .map(
+        i =>
+          (
+            workbook.getSheetName(i),
+            workbook.getSheetAt(i).getLastRowNum(),
+            workbook.getSheetAt(i).rowIterator.asScala.map(r => r.getLastCellNum).max
+          )
+      )
+      .toArray
+
+    val sheet = workbook.createSheet()
+    val header = sheet.createRow(0)
+    header.createCell(0).setCellValue("Worksheet")
+    header.createCell(1).setCellValue("RowCount")
+    header.createCell(2).setCellValue("MaxCellCount")
+
+    Range(0, metadata.length)
+      .map(i => {
+        val row = sheet.createRow(i + 1)
+        row.createCell(0).setCellValue(metadata(i)._1)
+        row.createCell(0).setCellValue(metadata(i)._2)
+        row.createCell(0).setCellValue(metadata(i)._3)
+        row.cellIterator.asScala.toSeq
+      })
+      .toIterator
+  }
+
+  override def toSheet(
+    header: Option[Seq[String]],
+    data: Iterator[Seq[Any]],
+    existingWorkbook: Workbook
+  ): WriteSheet = {
+    throw new NotImplementedError()
   }
 }
